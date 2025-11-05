@@ -313,7 +313,7 @@ local function resolveItemUtilityModule()
     for _, descendant in ipairs(modules:GetDescendants()) do
         if descendant:IsA("ModuleScript") then
             local name = string.lower(descendant.Name)
-            if name == "itemutility" or name == "item_util" then
+            if name == "itemutility" or name == "item_util" or name == "itemstringutility" then
                 return descendant
             end
         end
@@ -1025,16 +1025,11 @@ function Feature.AutoFavourite:tick()
         return
     end
 
-    if not self.itemUtility or not self.itemUtility.GetItemData then
-        debugOnce("autofav-itemutility-missing-method", "Auto Favourite: ItemUtility tidak menyediakan GetItemData")
-        return
-    end
-
     for _, item in ipairs(items) do
         local baseData
-        if item.Id and self.itemUtility.GetItemData then
+        if self.itemUtility and self.itemUtility.GetItemData and item.Id then
             local ok, data = pcall(self.itemUtility.GetItemData, self.itemUtility, item.Id)
-            if ok then
+            if ok and data then
                 baseData = data
             end
         end
