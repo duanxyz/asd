@@ -785,6 +785,9 @@ Feature.AutoFavourite = {
     itemUtility = nil,
 }
 
+local extractMutationNames
+local extractTier
+
 local function exposeFeatureDebug()
     local ok, env = pcall(function()
         return getgenv and getgenv() or _G
@@ -819,8 +822,6 @@ local function exposeFeatureDebug()
         end
     end
 end
-
-exposeFeatureDebug()
 
 local function normalizeToken(token)
     if not token then
@@ -935,12 +936,23 @@ function Feature.AutoFavourite:init()
                 local ok, replionLib = pcall(require, replionModule)
                 if ok then
                     self.replion = replionLib
+                    debugOnce("autofav-replion-info", "Auto Favourite: Replion module tipe", typeof(replionLib))
                 else
                     debugOnce("autofav-replion", "Auto Favourite: require Replion gagal", replionLib)
                 end
             else
                 debugOnce("autofav-replion-missing", "Auto Favourite: modul Replion tidak ditemukan")
             end
+        end
+    end
+
+    if not self.replion then
+        local okEnv, env = pcall(function()
+            return getgenv and getgenv() or _G
+        end)
+        if okEnv and env and env.Replion then
+            self.replion = env.Replion
+            debugOnce("autofav-replion-global", "Auto Favourite: menggunakan global Replion")
         end
     end
 
@@ -966,13 +978,44 @@ function Feature.AutoFavourite:init()
 end
 
 function Feature.AutoFavourite:getInventoryItems()
-    if not (self.replion and self.replion.Client and self.replion.Client.WaitReplion) then
+    local replion = self.replion
+    if not replion then
+        debugOnce("autofav-client", "Auto Favourite: Replion belum tersedia")
+        return nil
+    end
+
+    local client
+    local rawClient = replion.Client
+
+    if typeof(rawClient) == "Instance" and rawClient:IsA("ModuleScript") then
+        local okRequire, result = pcall(require, rawClient)
+        if okRequire then
+            replion.Client = result
+            rawClient = result
+        else
+            debugOnce("autofav-client-require", "Auto Favourite: require Replion.Client gagal", result)
+        end
+    end
+
+    if type(rawClient) == "table" and rawClient.WaitReplion then
+        client = rawClient
+    elseif replion.GetClient then
+        local okCall, result = pcall(function()
+            return replion:GetClient()
+        end)
+        if okCall and type(result) == "table" and result.WaitReplion then
+            client = result
+            replion.Client = result
+        end
+    end
+
+    if not client then
         debugOnce("autofav-client", "Auto Favourite: Replion Client tidak valid")
         return nil
     end
 
     local ok, result = pcall(function()
-        local replica = self.replion.Client:WaitReplion("Data")
+        local replica = client:WaitReplion("Data")
         if replica and replica.Get then
             return replica:Get({"Inventory", "Items"})
         end
@@ -987,7 +1030,7 @@ function Feature.AutoFavourite:getInventoryItems()
     return nil
 end
 
-local function extractMutationNames(item)
+extractMutationNames = function(item)
     local names = {}
     if type(item) ~= "table" then
         return names
@@ -1028,7 +1071,7 @@ local function hasEntries(set)
     return set and next(set) ~= nil
 end
 
-local function extractTier(item, baseData)
+extractTier = function(item, baseData)
     local candidates = {
         baseData and baseData.Data and baseData.Data.Tier,
         baseData and baseData.Tier,
@@ -1163,6 +1206,8 @@ function Feature.AutoFavourite:stop()
 
     notify("info", "Auto Favourite", "Dimatikan", 3)
 end
+
+exposeFeatureDebug()
 
 local function buildAutoFishUI()
     if not ensureWindow() then
