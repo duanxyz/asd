@@ -290,13 +290,24 @@ local function resolveReplionModule()
         return nil
     end
 
+    local fallback
     for _, descendant in ipairs(packageFolder:GetDescendants()) do
         if descendant:IsA("ModuleScript") and string.lower(descendant.Name) == "replion" then
             return descendant
         end
+
+        if descendant:IsA("ModuleScript") then
+            local lowered = string.lower(descendant.Name)
+            if lowered == "clientreplion" then
+                return descendant
+            end
+            if lowered == "replion.init" or lowered == "replion_module" or lowered == "ytrev_replion" then
+                fallback = descendant
+            end
+        end
     end
 
-    return nil
+    return fallback
 end
 
 local function resolveItemUtilityModule()
@@ -632,6 +643,7 @@ function Feature.AutoSell:init()
         end
 
         self.replion = replionLib
+        debugOnce("autosell-replion-info", "Auto Sell: Replion module", replionModule:GetFullName())
     end
 
     if not self.sellRemote then
@@ -647,13 +659,40 @@ function Feature.AutoSell:init()
 end
 
 function Feature.AutoSell:getInventoryItems()
-    if not (self.replion and self.replion.Client and self.replion.Client.WaitReplion) then
+    local replion = self.replion
+    if not replion then
+        debugOnce("autosell-client", "Auto Sell: Replion belum tersedia")
+        return nil
+    end
+
+    local client = replion.Client
+    if typeof(client) == "Instance" and client:IsA("ModuleScript") then
+        local okRequire, required = pcall(require, client)
+        if okRequire then
+            client = required
+            replion.Client = required
+        else
+            debugOnce("autosell-client-require", "Auto Sell: require Replion.Client gagal", required)
+        end
+    end
+
+    if not client and replion.GetClient then
+        local okCall, result = pcall(function()
+            return replion:GetClient()
+        end)
+        if okCall then
+            client = result
+            replion.Client = result
+        end
+    end
+
+    if type(client) ~= "table" or not client.WaitReplion then
         debugOnce("autosell-client", "Auto Sell: Replion Client tidak valid")
         return nil
     end
 
     local ok, result = pcall(function()
-        local dataReplica = self.replion.Client:WaitReplion("Data")
+        local dataReplica = client:WaitReplion("Data")
         if dataReplica and dataReplica.Get then
             return dataReplica:Get({"Inventory", "Items"})
         end
