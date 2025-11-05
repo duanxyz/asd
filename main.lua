@@ -873,7 +873,7 @@ function Feature.AutoFavourite:setMode(text)
         gabungan = "both",
         kombinasi = "both",
         salahsatu = "either",
-        "salah-satu" = "either",
+        ["salah-satu"] = "either",
         either = "either",
         any = "either",
     }
