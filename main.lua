@@ -36,6 +36,17 @@ local function debugLog(...)
     warn("[FishIt]", ...)
 end
 
+-- NOTE: Cache untuk log sekali saja agar konsol tidak banjir
+local debugOnceCache = {}
+
+local function debugOnce(key, ...)
+    if debugOnceCache[key] then
+        return
+    end
+    debugOnceCache[key] = true
+    debugLog(...)
+end
+
 local function assertService(value, name)
     if value then
         return value
@@ -238,6 +249,79 @@ local function trackConnection(conn)
     return conn
 end
 
+local function getPackageIndex()
+    local packages = Root.Packages
+    if not packages then
+        return nil
+    end
+    return packages:FindFirstChild("_Index")
+end
+
+local function findPackageByKeyword(keyword)
+    local index = getPackageIndex()
+    if not index then
+        return nil
+    end
+
+    keyword = string.lower(keyword)
+    for _, packageFolder in ipairs(index:GetChildren()) do
+        if string.find(string.lower(packageFolder.Name), keyword, 1, true) then
+            return packageFolder
+        end
+    end
+
+    return nil
+end
+
+local function resolveNetFolder()
+    local packageFolder = findPackageByKeyword("sleitnick_net")
+    if not packageFolder then
+        packageFolder = findPackageByKeyword("net@")
+    end
+    if not packageFolder then
+        return nil
+    end
+    return packageFolder:FindFirstChild("net")
+end
+
+local function resolveReplionModule()
+    local packageFolder = findPackageByKeyword("replion")
+    if not packageFolder then
+        return nil
+    end
+
+    for _, descendant in ipairs(packageFolder:GetDescendants()) do
+        if descendant:IsA("ModuleScript") and string.lower(descendant.Name) == "replion" then
+            return descendant
+        end
+    end
+
+    return nil
+end
+
+local function resolveItemUtilityModule()
+    local modules = Root.Modules
+    if not modules then
+        return nil
+    end
+
+    local itemUtility = modules:FindFirstChild("ItemUtility", true)
+    if itemUtility and itemUtility:IsA("ModuleScript") then
+        return itemUtility
+    end
+
+    for _, descendant in ipairs(modules:GetDescendants()) do
+        if descendant:IsA("ModuleScript") then
+            local name = string.lower(descendant.Name)
+            if name == "itemutility" or name == "item_util" then
+                return descendant
+            end
+        end
+    end
+
+    return nil
+end
+
 --[[
     FEATURE BLOCK: WindUI Loader
     ------------------------------------------------------------
@@ -381,19 +465,13 @@ Feature.AutoFish = {
 }
 
 function Feature.AutoFish:init()
-    local packageIndex = assertService(Root.Packages and Root.Packages:FindFirstChild("_Index"), "Packages._Index")
-    if not packageIndex then
-        return false
-    end
-
-    local net = packageIndex:FindFirstChild("sleitnick_net@0.2.0")
-    net = net and net:FindFirstChild("net")
-
+    local net = resolveNetFolder()
     if not net then
-        debugLog("Net package tidak ditemukan")
+        debugOnce("net-missing", "Net package tidak ditemukan")
         return false
     end
 
+    self.net = net
     self.equipRemote = net:FindFirstChild("RE/EquipToolFromHotbar")
     self.chargeRemote = net:FindFirstChild("RF/ChargeFishingRod")
     self.miniGameRemote = net:FindFirstChild("RF/RequestFishingMinigameStarted")
@@ -514,6 +592,502 @@ function Feature.AutoFish:cycle()
     end
 end
 
+--[[
+    FEATURE BLOCK: Auto Sell inventory (non favorit saja)
+    ------------------------------------------------------------
+]]
+
+Feature.AutoSell = {
+    running = false,
+    threshold = 60,
+    minInterval = 60,
+    pollInterval = 10,
+    lastSell = 0,
+    net = nil,
+    replion = nil,
+    sellRemote = nil,
+}
+
+function Feature.AutoSell:init()
+    if not self.net then
+        self.net = resolveNetFolder()
+    end
+
+    if not self.net then
+        debugOnce("autosell-net", "Auto Sell: net folder tidak ditemukan")
+        return false
+    end
+
+    if not self.replion then
+        local replionModule = resolveReplionModule()
+        if not replionModule then
+            debugOnce("autosell-replion-missing", "Auto Sell: modul Replion tidak ditemukan")
+            return false
+        end
+
+        local ok, replionLib = pcall(require, replionModule)
+        if not ok then
+            debugOnce("autosell-replion-error", "Auto Sell: require Replion gagal", replionLib)
+            return false
+        end
+
+        self.replion = replionLib
+    end
+
+    if not self.sellRemote then
+        self.sellRemote = self.net:FindFirstChild("RF/SellAllItems")
+    end
+
+    if not self.sellRemote then
+        debugOnce("autosell-remote", "Auto Sell: remote RF/SellAllItems tidak ditemukan")
+        return false
+    end
+
+    return true
+end
+
+function Feature.AutoSell:getInventoryItems()
+    if not (self.replion and self.replion.Client and self.replion.Client.WaitReplion) then
+        debugOnce("autosell-client", "Auto Sell: Replion Client tidak valid")
+        return nil
+    end
+
+    local ok, result = pcall(function()
+        local dataReplica = self.replion.Client:WaitReplion("Data")
+        if dataReplica and dataReplica.Get then
+            return dataReplica:Get({"Inventory", "Items"})
+        end
+        return nil
+    end)
+
+    if ok then
+        return result
+    end
+
+    debugLog("Auto Sell: gagal ambil inventory", result)
+    return nil
+end
+
+function Feature.AutoSell:computeUnfavoritedCount(items)
+    local total = 0
+    if type(items) ~= "table" then
+        return total
+    end
+
+    for _, item in ipairs(items) do
+        if type(item) == "table" and not item.Favorited then
+            total += item.Count or 1
+        end
+    end
+
+    return total
+end
+
+function Feature.AutoSell:invokeSell(count)
+    if not self.sellRemote then
+        return false
+    end
+
+    local ok, err = pcall(function()
+        self.sellRemote:InvokeServer()
+    end)
+
+    if not ok then
+        debugLog("Auto Sell: InvokeServer gagal", err)
+        notify("error", "Auto Sell", "Penjualan gagal, cek console", 4)
+        return false
+    end
+
+    notify("info", "Auto Sell", string.format("Menjual %d ikan non favorit", count), 4)
+    return true
+end
+
+function Feature.AutoSell:tick()
+    local items = self:getInventoryItems()
+    if not items then
+        return
+    end
+
+    local unfavoritedCount = self:computeUnfavoritedCount(items)
+    if unfavoritedCount < self.threshold then
+        return
+    end
+
+    local now = os.time()
+    if now - self.lastSell < self.minInterval then
+        return
+    end
+
+    if self:invokeSell(unfavoritedCount) then
+        self.lastSell = now
+    end
+end
+
+function Feature.AutoSell:start()
+    if self.running then
+        return
+    end
+
+    if not self:init() then
+        notify("error", "Auto Sell", "Dependensi belum siap", 4)
+        return
+    end
+
+    self.running = true
+    state.autoSell = true
+
+    notify("success", "Auto Sell", "Dinyalakan", 3)
+
+    task.spawn(function()
+        while self.running do
+            local success, err = pcall(function()
+                self:tick()
+            end)
+
+            if not success then
+                debugLog("Auto Sell: tick error", err)
+                notify("warning", "Auto Sell", "Tick error, cek console", 3)
+                task.wait(1)
+            end
+
+            task.wait(self.pollInterval)
+        end
+    end)
+end
+
+function Feature.AutoSell:stop()
+    if not self.running then
+        return
+    end
+
+    self.running = false
+    state.autoSell = false
+
+    notify("info", "Auto Sell", "Dimatikan", 3)
+end
+
+--[[
+    FEATURE BLOCK: Auto Favourite (rarity & mutasi)
+    ------------------------------------------------------------
+]]
+
+Feature.AutoFavourite = {
+    running = false,
+    pollInterval = 5,
+    raritySet = {
+        secret = true,
+        mythic = true,
+        legendary = true,
+    },
+    mutationSet = {},
+    mode = "rarity",
+    replion = nil,
+    itemUtility = nil,
+}
+
+local function normalizeToken(token)
+    if not token then
+        return nil
+    end
+    token = string.gsub(token, "^%s+", "")
+    token = string.gsub(token, "%s+$", "")
+    if token == "" then
+        return nil
+    end
+    return string.lower(token)
+end
+
+local function parseTokenList(text)
+    local set = {}
+    local pretty = {}
+
+    if type(text) ~= "string" then
+        return set, pretty
+    end
+
+    for token in string.gmatch(text, "[^,]+") do
+        local normalized = normalizeToken(token)
+        if normalized then
+            set[normalized] = true
+            table.insert(pretty, normalized)
+        end
+    end
+
+    return set, pretty
+end
+
+function Feature.AutoFavourite:setRarityList(text)
+    local set, pretty = parseTokenList(text)
+    if next(set) == nil then
+        notify("warning", "Auto Favourite", "Daftar rarity kosong, gunakan koma", 4)
+        return
+    end
+
+    self.raritySet = set
+    notify("info", "Auto Favourite", "Rarity aktif: " .. table.concat(pretty, ", "), 4)
+end
+
+function Feature.AutoFavourite:setMutationList(text)
+    local set, pretty = parseTokenList(text)
+    if next(set) == nil then
+        notify("warning", "Auto Favourite", "Daftar mutasi kosong, gunakan koma", 4)
+        return
+    end
+
+    self.mutationSet = set
+    notify("info", "Auto Favourite", "Mutasi aktif: " .. table.concat(pretty, ", "), 4)
+end
+
+function Feature.AutoFavourite:resetRarity()
+    self.raritySet = {
+        secret = true,
+        mythic = true,
+        legendary = true,
+    }
+
+    notify("info", "Auto Favourite", "Rarity kembali ke default (Secret, Mythic, Legendary)", 4)
+end
+
+function Feature.AutoFavourite:resetMutation()
+    self.mutationSet = {}
+    notify("info", "Auto Favourite", "Daftar mutasi dikosongkan", 3)
+end
+
+function Feature.AutoFavourite:setMode(text)
+    local normalized = normalizeToken(text)
+    if not normalized then
+        notify("warning", "Auto Favourite", "Mode tidak dikenal", 3)
+        return
+    end
+
+    local aliases = {
+        rarity = "rarity",
+        tier = "rarity",
+        tiers = "rarity",
+        mutasi = "mutation",
+        mutation = "mutation",
+        mutasi_only = "mutation",
+        kedua = "both",
+        keduanya = "both",
+        both = "both",
+        gabungan = "both",
+        kombinasi = "both",
+        salahsatu = "either",
+        "salah-satu" = "either",
+        either = "either",
+        any = "either",
+    }
+
+    local mode = aliases[normalized]
+    if not mode then
+        notify("warning", "Auto Favourite", "Mode tidak valid, gunakan: rarity/mutasi/keduanya/salah-satu", 4)
+        return
+    end
+
+    self.mode = mode
+    notify("info", "Auto Favourite", "Mode set ke " .. mode, 3)
+end
+
+function Feature.AutoFavourite:init()
+    if not self.replion then
+        if Feature.AutoSell and Feature.AutoSell.replion then
+            self.replion = Feature.AutoSell.replion
+        else
+            local replionModule = resolveReplionModule()
+            if replionModule then
+                local ok, replionLib = pcall(require, replionModule)
+                if ok then
+                    self.replion = replionLib
+                else
+                    debugOnce("autofav-replion", "Auto Favourite: require Replion gagal", replionLib)
+                end
+            else
+                debugOnce("autofav-replion-missing", "Auto Favourite: modul Replion tidak ditemukan")
+            end
+        end
+    end
+
+    if not self.itemUtility then
+        local itemUtilityModule = resolveItemUtilityModule()
+        if itemUtilityModule then
+            local ok, itemUtilityLib = pcall(require, itemUtilityModule)
+            if ok then
+                self.itemUtility = itemUtilityLib
+            else
+                debugOnce("autofav-itemutility", "Auto Favourite: require ItemUtility gagal", itemUtilityLib)
+            end
+        else
+            debugOnce("autofav-itemutility-missing", "Auto Favourite: modul ItemUtility tidak ditemukan")
+        end
+    end
+
+    if not self.replion then
+        return false
+    end
+
+    return true
+end
+
+function Feature.AutoFavourite:getInventoryItems()
+    if not (self.replion and self.replion.Client and self.replion.Client.WaitReplion) then
+        debugOnce("autofav-client", "Auto Favourite: Replion Client tidak valid")
+        return nil
+    end
+
+    local ok, result = pcall(function()
+        local replica = self.replion.Client:WaitReplion("Data")
+        if replica and replica.Get then
+            return replica:Get({"Inventory", "Items"})
+        end
+        return nil
+    end)
+
+    if ok then
+        return result
+    end
+
+    debugLog("Auto Favourite: gagal ambil inventory", result)
+    return nil
+end
+
+local function extractMutationNames(item)
+    local names = {}
+    if type(item) ~= "table" then
+        return names
+    end
+
+    local source = item.Mutations or item.mutations or item.Mutation or item.mutation
+    if type(source) ~= "table" then
+        return names
+    end
+
+    for _, mut in pairs(source) do
+        local name
+        if type(mut) == "string" then
+            name = mut
+        elseif type(mut) == "table" then
+            name = mut.Name or mut.name or mut.Id or mut.id or mut.DisplayName or mut[1]
+        end
+
+        if name then
+            table.insert(names, string.lower(tostring(name)))
+        end
+    end
+
+    return names
+end
+
+local function hasEntries(set)
+    return set and next(set) ~= nil
+end
+
+function Feature.AutoFavourite:shouldFavourite(item, baseData)
+    local matchesRarity = false
+    local matchesMutation = false
+
+    if baseData and baseData.Data and baseData.Data.Tier then
+        matchesRarity = self.raritySet[string.lower(baseData.Data.Tier)] or false
+    end
+
+    if hasEntries(self.mutationSet) then
+        local mutationNames = extractMutationNames(item)
+        for _, name in ipairs(mutationNames) do
+            if self.mutationSet[name] then
+                matchesMutation = true
+                break
+            end
+        end
+    end
+
+    if self.mode == "mutation" then
+        return matchesMutation
+    end
+
+    if self.mode == "both" then
+        if not hasEntries(self.mutationSet) then
+            debugOnce("autofav-mode-mutation-empty", "Auto Favourite: mode 'both' tapi daftar mutasi kosong")
+            return matchesRarity
+        end
+        return matchesRarity and matchesMutation
+    end
+
+    if self.mode == "either" then
+        return matchesRarity or matchesMutation
+    end
+
+    -- default rarity
+    return matchesRarity
+end
+
+function Feature.AutoFavourite:tick()
+    local items = self:getInventoryItems()
+    if not items then
+        return
+    end
+
+    if not self.itemUtility or not self.itemUtility.GetItemData then
+        debugOnce("autofav-itemutility-missing-method", "Auto Favourite: ItemUtility tidak menyediakan GetItemData")
+        return
+    end
+
+    for _, item in ipairs(items) do
+        local baseData
+        if item.Id and self.itemUtility.GetItemData then
+            local ok, data = pcall(self.itemUtility.GetItemData, self.itemUtility, item.Id)
+            if ok then
+                baseData = data
+            end
+        end
+
+        if not item.Favorited and self:shouldFavourite(item, baseData) then
+            item.Favorited = true
+        end
+    end
+end
+
+function Feature.AutoFavourite:start()
+    if self.running then
+        return
+    end
+
+    if not self:init() then
+        notify("error", "Auto Favourite", "Dependensi belum siap", 4)
+        return
+    end
+
+    self.running = true
+    state.autoFavourite = true
+
+    notify("success", "Auto Favourite", "Dinyalakan", 3)
+
+    task.spawn(function()
+        while self.running do
+            local success, err = pcall(function()
+                self:tick()
+            end)
+
+            if not success then
+                debugLog("Auto Favourite: tick error", err)
+                notify("warning", "Auto Favourite", "Tick error, cek console", 3)
+                task.wait(1)
+            end
+
+            task.wait(self.pollInterval)
+        end
+    end)
+end
+
+function Feature.AutoFavourite:stop()
+    if not self.running then
+        return
+    end
+
+    self.running = false
+    state.autoFavourite = false
+
+    notify("info", "Auto Favourite", "Dimatikan", 3)
+end
+
 local function buildAutoFishUI()
     if not ensureWindow() then
         return
@@ -542,27 +1116,154 @@ local function buildAutoFishUI()
         end,
     })
 
-    section:Slider({
+    local function parseAndClamp(value, minValue, maxValue)
+        local numberValue = tonumber(value)
+        if numberValue == nil then
+            return nil
+        end
+
+        if minValue ~= nil then
+            numberValue = math.max(minValue, numberValue)
+        end
+
+        if maxValue ~= nil then
+            numberValue = math.min(maxValue, numberValue)
+        end
+
+        return numberValue
+    end
+
+    section:Input({
         Title = "Delay Rod",
-        Content = "Sesuaikan delay utama (detik)",
-        Min = 0.5,
-        Max = 6,
-        Default = Feature.AutoFish.rodDelay,
+        Content = "Detik delay utama (0.5 - 6)",
+        Placeholder = string.format("%.2f", Feature.AutoFish.rodDelay),
         Callback = function(value)
-            Feature.AutoFish:setRodDelay(value, nil)
-            notify("info", "Delay Rod", string.format("Delay %.2fs", value), 2)
+            local numberValue = parseAndClamp(value, 0.5, 6)
+            if not numberValue then
+                notify("warning", "Delay Rod", "Masukkan angka valid", 3)
+                return
+            end
+
+            Feature.AutoFish:setRodDelay(numberValue, nil)
+            notify("info", "Delay Rod", string.format("Delay %.2fs", numberValue), 2)
         end,
     })
 
-    section:Slider({
+    section:Input({
         Title = "Delay Bypass",
-        Content = "Delay firing completion kedua",
-        Min = 0.2,
-        Max = 2,
-        Default = Feature.AutoFish.bypassDelay,
+        Content = "Detik delay completion kedua (0.2 - 2)",
+        Placeholder = string.format("%.2f", Feature.AutoFish.bypassDelay),
         Callback = function(value)
-            Feature.AutoFish:setRodDelay(nil, value)
-            notify("info", "Delay Bypass", string.format("Delay %.2fs", value), 2)
+            local numberValue = parseAndClamp(value, 0.2, 2)
+            if not numberValue then
+                notify("warning", "Delay Bypass", "Masukkan angka valid", 3)
+                return
+            end
+
+            Feature.AutoFish:setRodDelay(nil, numberValue)
+            notify("info", "Delay Bypass", string.format("Delay %.2fs", numberValue), 2)
+        end,
+    })
+
+    section:Toggle({
+        Title = "Auto Sell",
+        Content = "Jual otomatis ikan non favorit",
+        Callback = function(value)
+            if value then
+                Feature.AutoSell:start()
+            else
+                Feature.AutoSell:stop()
+            end
+        end,
+    })
+
+    section:Input({
+        Title = "Ambang Auto Sell",
+        Content = "Ikan non favorit sebelum dijual (10 - 150)",
+        Placeholder = tostring(Feature.AutoSell.threshold),
+        Callback = function(value)
+            local numberValue = parseAndClamp(value, 10, 150)
+            if not numberValue then
+                notify("warning", "Auto Sell", "Masukkan angka valid", 3)
+                return
+            end
+
+            Feature.AutoSell.threshold = math.floor(numberValue)
+            notify("info", "Auto Sell", string.format("Threshold %d ikan", Feature.AutoSell.threshold), 2)
+        end,
+    })
+
+    section:Input({
+        Title = "Jeda Penjualan",
+        Content = "Jeda antar penjualan (detik) (15 - 180)",
+        Placeholder = tostring(Feature.AutoSell.minInterval),
+        Callback = function(value)
+            local numberValue = parseAndClamp(value, 15, 180)
+            if not numberValue then
+                notify("warning", "Auto Sell", "Masukkan angka valid", 3)
+                return
+            end
+
+            Feature.AutoSell.minInterval = math.floor(numberValue)
+            notify("info", "Auto Sell", string.format("Jeda %ds", Feature.AutoSell.minInterval), 2)
+        end,
+    })
+
+    local favouriteSection = autoTab:Section({
+        Title = "Auto Favourite",
+        Icon = "star",
+    })
+
+    favouriteSection:Paragraph({
+        Title = "Proteksi Ikan Berharga",
+        Content = "Tandai otomatis ikan berdasarkan rarity, mutasi, atau keduanya.",
+    })
+
+    favouriteSection:Toggle({
+        Title = "Auto Favourite",
+        Content = "Aktifkan penandaan otomatis",
+        Callback = function(value)
+            if value then
+                Feature.AutoFavourite:start()
+            else
+                Feature.AutoFavourite:stop()
+            end
+        end,
+    })
+
+    favouriteSection:Input({
+        Title = "Daftar Rarity",
+        Content = "Pisahkan dengan koma (contoh: Secret, Mythic, Legendary)",
+        Placeholder = "Secret, Mythic, Legendary",
+        Callback = function(value)
+            Feature.AutoFavourite:setRarityList(value)
+        end,
+    })
+
+    favouriteSection:Input({
+        Title = "Daftar Mutasi",
+        Content = "Pisahkan dengan koma (contoh: Radiant, Glacial)",
+        Placeholder = "Radiant, Glacial",
+        Callback = function(value)
+            Feature.AutoFavourite:setMutationList(value)
+        end,
+    })
+
+    favouriteSection:Input({
+        Title = "Mode Seleksi",
+        Content = "rarity / mutasi / keduanya / salah-satu",
+        Placeholder = "rarity",
+        Callback = function(value)
+            Feature.AutoFavourite:setMode(value)
+        end,
+    })
+
+    favouriteSection:Button({
+        Title = "Reset Kriteria",
+        Content = "Kembalikan rarity default dan kosongkan mutasi",
+        Callback = function()
+            Feature.AutoFavourite:resetRarity()
+            Feature.AutoFavourite:resetMutation()
         end,
     })
 end
