@@ -785,6 +785,39 @@ Feature.AutoFavourite = {
     itemUtility = nil,
 }
 
+local function exposeFeatureDebug()
+    local ok, env = pcall(function()
+        return getgenv and getgenv() or _G
+    end)
+    if not ok then
+        return
+    end
+
+    env.FishItDebug = env.FishItDebug or {}
+    env.FishItDebug.Features = Feature
+    env.FishItDebug.DumpInventory = function()
+        local items = Feature.AutoFavourite:getInventoryItems()
+        if not items then
+            debugLog("AutoFavourite", "Inventory tidak tersedia")
+            return
+        end
+
+        for index, item in ipairs(items) do
+            local mutations = item.Mutations or item.mutations or {}
+            local summary
+            if Services.HttpService then
+                local okEncode, encoded = pcall(Services.HttpService.JSONEncode, Services.HttpService, mutations)
+                summary = okEncode and encoded or "<encode-failed>"
+            else
+                summary = "<no-httpservice>"
+            end
+            debugLog("Inventory", index, item.Id or item.Name, item.Tier or item.Rarity or item.tier, summary)
+        end
+    end
+end
+
+exposeFeatureDebug()
+
 local function normalizeToken(token)
     if not token then
         return nil
