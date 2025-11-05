@@ -803,15 +803,19 @@ local function exposeFeatureDebug()
         end
 
         for index, item in ipairs(items) do
-            local mutations = item.Mutations or item.mutations or {}
+            local mutations = extractMutationNames(item)
             local summary
             if Services.HttpService then
-                local okEncode, encoded = pcall(Services.HttpService.JSONEncode, Services.HttpService, mutations)
+                local okEncode, encoded = pcall(function()
+                    return Services.HttpService:JSONEncode(mutations)
+                end)
                 summary = okEncode and encoded or "<encode-failed>"
             else
                 summary = "<no-httpservice>"
             end
-            debugLog("Inventory", index, item.Id or item.Name, item.Tier or item.Rarity or item.tier, summary)
+
+            local tier = extractTier(item)
+            debugLog("Inventory", index, item.Id or item.Name, tier or "<no-tier>", summary)
         end
     end
 end
@@ -989,21 +993,31 @@ local function extractMutationNames(item)
         return names
     end
 
-    local source = item.Mutations or item.mutations or item.Mutation or item.mutation
-    if type(source) ~= "table" then
-        return names
-    end
+    local candidates = {
+        item.Mutations,
+        item.mutations,
+        item.Mutation,
+        item.mutation,
+        item.BaseData and item.BaseData.Mutations,
+        item.BaseData and item.BaseData.Data and item.BaseData.Data.Mutations,
+        item.Metadata and item.Metadata.Mutations,
+        item.ItemData and item.ItemData.Mutations,
+    }
 
-    for _, mut in pairs(source) do
-        local name
-        if type(mut) == "string" then
-            name = mut
-        elseif type(mut) == "table" then
-            name = mut.Name or mut.name or mut.Id or mut.id or mut.DisplayName or mut[1]
-        end
+    for _, source in ipairs(candidates) do
+        if type(source) == "table" then
+            for _, mut in pairs(source) do
+                local name
+                if type(mut) == "string" then
+                    name = mut
+                elseif type(mut) == "table" then
+                    name = mut.Name or mut.name or mut.Id or mut.id or mut.DisplayName or mut[1]
+                end
 
-        if name then
-            table.insert(names, string.lower(tostring(name)))
+                if name then
+                    table.insert(names, string.lower(tostring(name)))
+                end
+            end
         end
     end
 
@@ -1014,12 +1028,36 @@ local function hasEntries(set)
     return set and next(set) ~= nil
 end
 
+local function extractTier(item, baseData)
+    local candidates = {
+        baseData and baseData.Data and baseData.Data.Tier,
+        baseData and baseData.Tier,
+        item.Tier,
+        item.Rarity,
+        item.tier,
+        item.rarity,
+        item.BaseData and item.BaseData.Tier,
+        item.BaseData and item.BaseData.Data and item.BaseData.Data.Tier,
+        item.ItemData and item.ItemData.Tier,
+        item.Metadata and item.Metadata.Tier,
+    }
+
+    for _, value in ipairs(candidates) do
+        if type(value) == "string" and value ~= "" then
+            return string.lower(value)
+        end
+    end
+
+    return nil
+end
+
 function Feature.AutoFavourite:shouldFavourite(item, baseData)
     local matchesRarity = false
     local matchesMutation = false
 
-    if baseData and baseData.Data and baseData.Data.Tier then
-        matchesRarity = self.raritySet[string.lower(baseData.Data.Tier)] or false
+    local tier = extractTier(item, baseData)
+    if tier then
+        matchesRarity = self.raritySet[tier] or false
     end
 
     if hasEntries(self.mutationSet) then
@@ -1064,6 +1102,16 @@ function Feature.AutoFavourite:tick()
             local ok, data = pcall(self.itemUtility.GetItemData, self.itemUtility, item.Id)
             if ok and data then
                 baseData = data
+            end
+        end
+
+        if not baseData then
+            if type(item.ItemData) == "table" then
+                baseData = item.ItemData
+            elseif type(item.BaseData) == "table" then
+                baseData = item.BaseData
+            elseif type(item.Metadata) == "table" then
+                baseData = item.Metadata
             end
         end
 
