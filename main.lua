@@ -334,7 +334,7 @@ local function resolveItemUtilityModule()
         return nil
     end
 
-    return locate(Root.Modules) or locate(Root.Shared)
+    return locate(Root.Shared) or locate(Root.Modules)
 end
 
 local function resolveFavouriteRemote()
@@ -891,6 +891,10 @@ local NumericTierAlias = {
 } -- # NOTE: Konversi tier numerik default game ke label rarity yang dipakai UI FishIt
 
 local function cloneTable(source)
+    if type(source) ~= "table" then
+        return source
+    end
+
     local target = {}
     for key, value in pairs(source) do
         target[key] = value
@@ -1239,33 +1243,34 @@ function Feature.AutoFavourite:ensureItemCatalog()
     local mapped = {}
 
     local function ingest(entry)
-        local entryType = typeof(entry)
-        if entryType == "table" then
-            if entry.Type == "Fish" and entry.Id then
-                mapped[entry.Id] = cloneTable(entry)
-            end
+        if type(entry) ~= "table" then
+            return
+        end
 
-            if entry.Data then
-                ingest(entry.Data) -- # NOTE: struktur ItemUtility menaruh info detail di field Data
-            end
+        local entryType = entry.Type or entry.type
+        local entryId = entry.Id or entry.id
 
-            if entry.Items then
-                ingest(entry.Items)
-            end
-        elseif entryType == "array" then
-            for index = 1, #entry do
-                ingest(entry[index])
+        if entryType == "Fish" and entryId then
+            mapped[entryId] = cloneTable(entry)
+        end
+
+        if type(entry.Data) == "table" then
+            ingest(entry.Data) -- # NOTE: sebagian entri menyimpan metadata utama di dalam Data
+        end
+
+        if type(entry.Items) == "table" then
+            ingest(entry.Items)
+        end
+
+        for _, value in pairs(entry) do
+            if type(value) == "table" then
+                ingest(value)
             end
         end
     end
 
-    for bucketName, bucket in pairs(allItems) do
+    for _, bucket in pairs(allItems) do
         ingest(bucket)
-        if type(bucket) == "table" then
-            for _, entry in pairs(bucket) do
-                ingest(entry)
-            end
-        end
     end
 
     if next(mapped) then
