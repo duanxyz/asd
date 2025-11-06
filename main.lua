@@ -738,21 +738,28 @@ function Feature.AutoSell:computeUnfavoritedCount(items)
 
     local autoFav = Feature.AutoFavourite
 
-    for _, item in ipairs(items) do
+    for key, item in pairs(items) do
         if type(item) == "table" then
-            local markedFavourite = false
+            local shouldProtect = false
 
             if autoFav and autoFav.running then
                 local baseData = autoFav:getBaseData(item)
                 if autoFav:shouldFavourite(item, baseData) then
-                    markedFavourite = true
-                    if not item.Favorited then
-                        item.Favorited = true -- # NOTE: Sinkronisasi tanda favorit lokal agar Auto Sell menghormati kriteria Auto Favourite
+                    shouldProtect = true
+
+                    local uuid = item.UUID or item.Uuid or item.ItemUUID or item.ItemUuid
+                    if not uuid and type(key) == "string" then
+                        uuid = key
+                    end
+
+                    if uuid then
+                        autoFav:markFavourite(uuid, item)
+                        item.Favorited = true
                     end
                 end
             end
 
-            if not markedFavourite and not item.Favorited then
+            if not shouldProtect and not item.Favorited then
                 total += item.Count or 1
             end
         end
@@ -1207,18 +1214,13 @@ function Feature.AutoFavourite:getBaseData(item)
     return nil
 end
 
-function Feature.AutoFavourite:markFavourite(item)
-    if type(item) ~= "table" then
-        return
-    end
-
-    if item.Favorited then
-        return
-    end
-
-    local uuid = item.UUID or item.Uuid or item.ItemUUID or item.ItemUuid or item.Id
+function Feature.AutoFavourite:markFavourite(uuid, item)
     if not uuid then
         debugOnce("autofav-missing-uuid", "Auto Favourite: item tidak punya UUID/Id untuk favorit")
+        return
+    end
+
+    if type(item) == "table" and item.Favorited then
         return
     end
 
@@ -1232,7 +1234,7 @@ function Feature.AutoFavourite:markFavourite(item)
 
     local remote = self.favouriteRemote
     local ok, err = pcall(function()
-        remote:FireServer(uuid) -- # NOTE: Sinkronisasi favorit ke server via RemoteEvent FavoriteItem
+        remote:FireServer(uuid) -- # NOTE: Kirim UUID ke server agar status favorit tersimpan permanen
     end)
 
     if not ok then
@@ -1285,12 +1287,23 @@ function Feature.AutoFavourite:tick()
         return
     end
 
-    for _, item in ipairs(items) do
+    for key, item in pairs(items) do
         local baseData = self:getBaseData(item)
 
-        if not item.Favorited and self:shouldFavourite(item, baseData) then
-            self:markFavourite(item)
-            item.Favorited = true
+        if self:shouldFavourite(item, baseData) then
+            local uuid = item and (item.UUID or item.Uuid or item.ItemUUID or item.ItemUuid)
+            if not uuid and type(key) == "string" then
+                uuid = key
+            end
+
+            if uuid then
+                self:markFavourite(uuid, item)
+                if type(item) == "table" then
+                    item.Favorited = true
+                end
+            else
+                debugOnce("autofav-no-uuid", "Auto Favourite: gagal dapat UUID item")
+            end
         end
     end
 end
