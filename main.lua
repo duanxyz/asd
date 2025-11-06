@@ -753,7 +753,10 @@ function Feature.AutoSell:computeUnfavoritedCount(items)
                     end
 
                     if uuid then
-                        autoFav:markFavourite(uuid, item)
+                        if not autoFav:isFavourite(uuid, item) then
+                            autoFav:markFavourite(uuid, item)
+                        end
+
                         item.Favorited = true
                     end
                 end
@@ -869,6 +872,7 @@ Feature.AutoFavourite = {
     replion = nil,
     itemUtility = nil,
     favouriteRemote = nil,
+    pendingFavourite = {},
 }
 
 local extractMutationNames
@@ -1239,6 +1243,34 @@ function Feature.AutoFavourite:markFavourite(uuid, item)
 
     if not ok then
         debugOnce("autofav-remote-error", "Auto Favourite: FavoriteItem FireServer gagal", err)
+        return
+    end
+
+    self.pendingFavourite[uuid] = os.clock()
+
+    if type(item) == "table" then
+        item.Favorited = true
+    end
+end
+
+function Feature.AutoFavourite:isFavourite(uuid, item)
+    if type(item) == "table" and item.Favorited then
+        return true
+    end
+
+    if uuid and self.pendingFavourite[uuid] then
+        return true
+    end
+
+    return false
+end
+
+function Feature.AutoFavourite:flushPending()
+    local now = os.clock()
+    for uuid, timestamp in pairs(self.pendingFavourite) do
+        if now - timestamp > 30 then
+            self.pendingFavourite[uuid] = nil
+        end
     end
 end
 
@@ -1287,6 +1319,8 @@ function Feature.AutoFavourite:tick()
         return
     end
 
+    self:flushPending()
+
     for key, item in pairs(items) do
         local baseData = self:getBaseData(item)
 
@@ -1296,13 +1330,10 @@ function Feature.AutoFavourite:tick()
                 uuid = key
             end
 
-            if uuid then
-                self:markFavourite(uuid, item)
-                if type(item) == "table" then
-                    item.Favorited = true
-                end
-            else
+            if not uuid then
                 debugOnce("autofav-no-uuid", "Auto Favourite: gagal dapat UUID item")
+            elseif not self:isFavourite(uuid, item) then
+                self:markFavourite(uuid, item)
             end
         end
     end
