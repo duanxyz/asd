@@ -877,6 +877,7 @@ Feature.AutoFavourite = {
     itemUtility = nil,
     favouriteRemote = nil,
     pendingFavourite = {},
+    itemCatalog = nil,
 }
 
 local NumericTierAlias = {
@@ -1212,6 +1213,60 @@ extractTier = function(item, baseData)
     return nil
 end
 
+function Feature.AutoFavourite:ensureItemCatalog()
+    if self.itemCatalog then
+        return self.itemCatalog
+    end
+
+    if not (self.itemUtility and self.itemUtility.GetAllItems) then
+        return nil
+    end
+
+    local ok, allItems = pcall(self.itemUtility.GetAllItems, self.itemUtility)
+    if not ok or type(allItems) ~= "table" then
+        debugOnce("autofav-itemcatalog", "Auto Favourite: GetAllItems gagal", allItems)
+        return nil
+    end
+
+    local mapped = {}
+
+    local function ingest(entry)
+        if type(entry) ~= "table" then
+            return
+        end
+
+        local id = entry.Id or entry.id
+        local data = entry.Data or entry.data or entry
+
+        if id and type(data) == "table" then
+            local cloned = {}
+            for key, value in pairs(data) do
+                cloned[key] = value
+            end
+            mapped[id] = cloned
+        end
+    end
+
+    for _, bucket in pairs(allItems) do
+        if type(bucket) == "table" then
+            if bucket.Id or bucket.Data then
+                ingest(bucket)
+            else
+                for _, entry in pairs(bucket) do
+                    ingest(entry)
+                end
+            end
+        end
+    end
+
+    if next(mapped) then
+        self.itemCatalog = mapped -- # NOTE: Cache katalog ItemUtility agar lookup Tier/Name konsisten meski ItemUtility tidak diekspos global
+        return mapped
+    end
+
+    return nil
+end
+
 function Feature.AutoFavourite:getBaseData(item)
     if type(item) ~= "table" then
         return nil
@@ -1239,6 +1294,13 @@ function Feature.AutoFavourite:getBaseData(item)
 
                 return data
             end
+        end
+    end
+
+    if not baseData and item.Id then
+        local catalog = self:ensureItemCatalog()
+        if catalog then
+            baseData = catalog[item.Id]
         end
     end
 
