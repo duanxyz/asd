@@ -337,6 +337,25 @@ local function resolveItemUtilityModule()
     return locate(Root.Shared) or locate(Root.Modules)
 end
 
+local function requireSharedItemUtility()
+    local shared = Root.Shared or Services.ReplicatedStorage:FindFirstChild("Shared")
+    if not shared then
+        return nil
+    end
+
+    local module = shared:FindFirstChild("ItemUtility", true)
+    if not module or not module:IsA("ModuleScript") then
+        return nil
+    end
+
+    local ok, lib = pcall(require, module)
+    if ok and type(lib) == "table" then
+        return lib
+    end
+
+    return nil
+end
+
 local function resolveFavouriteRemote()
     local net = resolveNetFolder()
     if not net then
@@ -1230,11 +1249,16 @@ function Feature.AutoFavourite:ensureItemCatalog()
         return self.itemCatalog
     end
 
-    if not (self.itemUtility and self.itemUtility.GetAllItems) then
+    local provider = self.itemUtility
+    if not (provider and provider.GetAllItems) then
+        provider = requireSharedItemUtility()
+    end
+
+    if not (provider and provider.GetAllItems) then
         return nil
     end
 
-    local ok, allItems = pcall(self.itemUtility.GetAllItems, self.itemUtility)
+    local ok, allItems = pcall(provider.GetAllItems, provider)
     if not ok or type(allItems) ~= "table" then
         debugOnce("autofav-itemcatalog", "Auto Favourite: GetAllItems gagal", allItems)
         return nil
@@ -1251,7 +1275,19 @@ function Feature.AutoFavourite:ensureItemCatalog()
         local entryId = entry.Id or entry.id
 
         if entryType == "Fish" and entryId then
-            mapped[entryId] = cloneTable(entry)
+            local target = entry
+            if type(entry.Data) == "table" and entry.Data.Type == "Fish" then
+                target = entry.Data
+            end
+
+            local tierNumber = target.Tier or target.tier
+            local tierLabel = tierNumber and NumericTierAlias[tierNumber]
+
+            mapped[entryId] = {
+                Tier = tierLabel or (type(tierNumber) == "string" and string.lower(tierNumber)) or tierNumber,
+                Name = target.Name or target.name,
+                TierNumber = tierNumber,
+            }
         end
 
         if type(entry.Data) == "table" then
