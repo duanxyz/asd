@@ -1259,8 +1259,13 @@ function Feature.AutoFavourite:ensureItemCatalog()
         end
     end
 
-    for _, bucket in pairs(allItems) do
+    for bucketName, bucket in pairs(allItems) do
         ingest(bucket)
+        if type(bucket) == "table" then
+            for _, entry in pairs(bucket) do
+                ingest(entry)
+            end
+        end
     end
 
     if next(mapped) then
