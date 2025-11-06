@@ -1239,33 +1239,21 @@ function Feature.AutoFavourite:ensureItemCatalog()
     local mapped = {}
 
     local function ingest(entry)
-        if type(entry) ~= "table" then
-            return
+        if type(entry) == "table" then
+            if entry.Type and entry.Id then
+                mapped[entry.Id] = cloneTable(entry)
+            end
+            if entry.Data then
+                ingest(entry.Data) -- # NOTE: struktur ItemUtility terkadang menaruh info utama di field Data
+            end
+            if entry.Items then
+                ingest(entry.Items)
+            end
         end
-
-        local data = entry.Data or entry.data or entry
-        if type(data) ~= "table" then
-            return
-        end
-
-        local id = entry.Id or entry.id or data.Id or data.id
-        if not id then
-            return
-        end
-
-        mapped[id] = cloneTable(data)
     end
 
     for _, bucket in pairs(allItems) do
-        if type(bucket) == "table" then
-            if bucket.Id or bucket.Data then
-                ingest(bucket)
-            else
-                for _, entry in pairs(bucket) do
-                    ingest(entry)
-                end
-            end
-        end
+        ingest(bucket)
     end
 
     if next(mapped) then
