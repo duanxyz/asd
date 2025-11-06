@@ -1428,6 +1428,9 @@ function Feature.AutoFavourite:shouldFavourite(item, baseData)
     local matchesMutation = false
 
     local tier = extractTier(item, baseData)
+    if not tier and baseData and baseData.TierNumber then
+        tier = NumericTierAlias[baseData.TierNumber] -- # NOTE: fallback saat katalog hanya menyediakan TierNumber numerik
+    end
     if tier then
         matchesRarity = self.raritySet[tier] or false
     end
