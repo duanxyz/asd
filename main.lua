@@ -713,9 +713,25 @@ function Feature.AutoSell:computeUnfavoritedCount(items)
         return total
     end
 
+    local autoFav = Feature.AutoFavourite
+
     for _, item in ipairs(items) do
-        if type(item) == "table" and not item.Favorited then
-            total += item.Count or 1
+        if type(item) == "table" then
+            local markedFavourite = false
+
+            if autoFav and autoFav.running then
+                local baseData = autoFav:getBaseData(item)
+                if autoFav:shouldFavourite(item, baseData) then
+                    markedFavourite = true
+                    if not item.Favorited then
+                        item.Favorited = true -- # NOTE: Sinkronisasi tanda favorit lokal agar Auto Sell menghormati kriteria Auto Favourite
+                    end
+                end
+            end
+
+            if not markedFavourite and not item.Favorited then
+                total += item.Count or 1
+            end
         end
     end
 
@@ -1133,6 +1149,33 @@ extractTier = function(item, baseData)
     return nil
 end
 
+function Feature.AutoFavourite:getBaseData(item)
+    if type(item) ~= "table" then
+        return nil
+    end
+
+    if self.itemUtility and self.itemUtility.GetItemData and item.Id then
+        local ok, data = pcall(self.itemUtility.GetItemData, self.itemUtility, item.Id)
+        if ok and data then
+            return data
+        end
+    end
+
+    local sources = {
+        item.ItemData,
+        item.BaseData,
+        item.Metadata,
+    }
+
+    for _, candidate in ipairs(sources) do
+        if type(candidate) == "table" and next(candidate) ~= nil then
+            return candidate
+        end
+    end
+
+    return nil
+end
+
 function Feature.AutoFavourite:shouldFavourite(item, baseData)
     local matchesRarity = false
     local matchesMutation = false
@@ -1179,23 +1222,7 @@ function Feature.AutoFavourite:tick()
     end
 
     for _, item in ipairs(items) do
-        local baseData
-        if self.itemUtility and self.itemUtility.GetItemData and item.Id then
-            local ok, data = pcall(self.itemUtility.GetItemData, self.itemUtility, item.Id)
-            if ok and data then
-                baseData = data
-            end
-        end
-
-        if not baseData then
-            if type(item.ItemData) == "table" then
-                baseData = item.ItemData
-            elseif type(item.BaseData) == "table" then
-                baseData = item.BaseData
-            elseif type(item.Metadata) == "table" then
-                baseData = item.Metadata
-            end
-        end
+        local baseData = self:getBaseData(item)
 
         if not item.Favorited and self:shouldFavourite(item, baseData) then
             item.Favorited = true
