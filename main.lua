@@ -890,6 +890,14 @@ local NumericTierAlias = {
     [1] = "common",
 } -- # NOTE: Konversi tier numerik default game ke label rarity yang dipakai UI FishIt
 
+local function cloneTable(source)
+    local target = {}
+    for key, value in pairs(source) do
+        target[key] = value
+    end
+    return target
+end
+
 local extractMutationNames
 local extractTier
 
@@ -1235,16 +1243,17 @@ function Feature.AutoFavourite:ensureItemCatalog()
             return
         end
 
-        local id = entry.Id or entry.id
         local data = entry.Data or entry.data or entry
-
-        if id and type(data) == "table" then
-            local cloned = {}
-            for key, value in pairs(data) do
-                cloned[key] = value
-            end
-            mapped[id] = cloned
+        if type(data) ~= "table" then
+            return
         end
+
+        local id = entry.Id or entry.id or data.Id or data.id
+        if not id then
+            return
+        end
+
+        mapped[id] = cloneTable(data)
     end
 
     for _, bucket in pairs(allItems) do
