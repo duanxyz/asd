@@ -1239,15 +1239,22 @@ function Feature.AutoFavourite:ensureItemCatalog()
     local mapped = {}
 
     local function ingest(entry)
-        if type(entry) == "table" then
-            if entry.Type and entry.Id then
+        local entryType = typeof(entry)
+        if entryType == "table" then
+            if entry.Type == "Fish" and entry.Id then
                 mapped[entry.Id] = cloneTable(entry)
             end
+
             if entry.Data then
-                ingest(entry.Data) -- # NOTE: struktur ItemUtility terkadang menaruh info utama di field Data
+                ingest(entry.Data) -- # NOTE: struktur ItemUtility menaruh info detail di field Data
             end
+
             if entry.Items then
                 ingest(entry.Items)
+            end
+        elseif entryType == "array" then
+            for index = 1, #entry do
+                ingest(entry[index])
             end
         end
     end
