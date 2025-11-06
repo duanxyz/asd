@@ -15,6 +15,7 @@ local LocalPlayer = Services.Players.LocalPlayer or Services.Players.PlayerAdded
 local Root = {
     Packages = Services.ReplicatedStorage:FindFirstChild("Packages"),
     Modules = Services.ReplicatedStorage:FindFirstChild("Modules"),
+    Shared = Services.ReplicatedStorage:FindFirstChild("Shared"),
 }
 
 -- NOTE: Status global fitur ditempatkan di satu wadah supaya mudah diinspeksi
@@ -311,26 +312,29 @@ local function resolveReplionModule()
 end
 
 local function resolveItemUtilityModule()
-    local modules = Root.Modules
-    if not modules then
+    local function locate(container)
+        if not container then
+            return nil
+        end
+
+        local primary = container:FindFirstChild("ItemUtility", true)
+        if primary and primary:IsA("ModuleScript") then
+            return primary
+        end
+
+        for _, descendant in ipairs(container:GetDescendants()) do
+            if descendant:IsA("ModuleScript") then
+                local lowered = string.lower(descendant.Name)
+                if lowered == "itemutility" or lowered == "item_util" or lowered == "itemstringutility" then
+                    return descendant -- # NOTE: dukung nama modul alternatif yang umum dipakai loader publik
+                end
+            end
+        end
+
         return nil
     end
 
-    local itemUtility = modules:FindFirstChild("ItemUtility", true)
-    if itemUtility and itemUtility:IsA("ModuleScript") then
-        return itemUtility
-    end
-
-    for _, descendant in ipairs(modules:GetDescendants()) do
-        if descendant:IsA("ModuleScript") then
-            local name = string.lower(descendant.Name)
-            if name == "itemutility" or name == "item_util" or name == "itemstringutility" then
-                return descendant
-            end
-        end
-    end
-
-    return nil
+    return locate(Root.Modules) or locate(Root.Shared)
 end
 
 local function resolveFavouriteRemote()
@@ -875,6 +879,16 @@ Feature.AutoFavourite = {
     pendingFavourite = {},
 }
 
+local NumericTierAlias = {
+    [7] = "secret",
+    [6] = "mythic",
+    [5] = "legendary",
+    [4] = "epic",
+    [3] = "rare",
+    [2] = "uncommon",
+    [1] = "common",
+} -- # NOTE: Konversi tier numerik default game ke label rarity yang dipakai UI FishIt
+
 local extractMutationNames
 local extractTier
 
@@ -1186,6 +1200,13 @@ extractTier = function(item, baseData)
         if type(value) == "string" and value ~= "" then
             return string.lower(value)
         end
+
+        if type(value) == "number" then
+            local alias = NumericTierAlias[value]
+            if alias then
+                return alias
+            end
+        end
     end
 
     return nil
@@ -1199,7 +1220,25 @@ function Feature.AutoFavourite:getBaseData(item)
     if self.itemUtility and self.itemUtility.GetItemData and item.Id then
         local ok, data = pcall(self.itemUtility.GetItemData, self.itemUtility, item.Id)
         if ok and data then
-            return data
+            if type(data) == "table" then
+                if type(data.Data) == "table" then
+                    local structured = {}
+                    for key, value in pairs(data.Data) do
+                        structured[key] = value
+                    end
+
+                    if data.Tier and structured.Tier == nil then
+                        structured.Tier = data.Tier
+                    end
+                    if data.Name and structured.Name == nil then
+                        structured.Name = data.Name
+                    end
+
+                    return structured -- # NOTE: ItemUtility mengembalikan {Data=...}; kita ekstraksi agar tier numerik bisa dibaca extractTier
+                end
+
+                return data
+            end
         end
     end
 
