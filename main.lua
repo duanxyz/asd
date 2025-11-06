@@ -1272,30 +1272,28 @@ function Feature.AutoFavourite:ensureItemCatalog()
         end
 
         local entryType = entry.Type or entry.type
+        if type(entryType) == "string" then
+            entryType = string.lower(entryType)
+        end
         local entryId = entry.Id or entry.id
 
-        if entryType == "Fish" and entryId then
+        if entryType == "fish" and entryId then
             local target = entry
-            if type(entry.Data) == "table" and entry.Data.Type == "Fish" then
+            if type(entry.Data) == "table" and (entry.Data.Type == "Fish" or entry.Data.type == "fish") then
                 target = entry.Data
             end
 
             local tierNumber = target.Tier or target.tier
             local tierLabel = tierNumber and NumericTierAlias[tierNumber]
+            if not tierLabel and type(tierNumber) == "string" then
+                tierLabel = string.lower(tierNumber)
+            end
 
             mapped[entryId] = {
                 Tier = tierLabel or (type(tierNumber) == "string" and string.lower(tierNumber)) or tierNumber,
                 Name = target.Name or target.name,
                 TierNumber = tierNumber,
             }
-        end
-
-        if type(entry.Data) == "table" then
-            ingest(entry.Data) -- # NOTE: sebagian entri menyimpan metadata utama di dalam Data
-        end
-
-        if type(entry.Items) == "table" then
-            ingest(entry.Items)
         end
 
         for _, value in pairs(entry) do
