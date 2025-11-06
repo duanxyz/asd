@@ -333,6 +333,29 @@ local function resolveItemUtilityModule()
     return nil
 end
 
+local function resolveFavouriteRemote()
+    local net = resolveNetFolder()
+    if not net then
+        return nil
+    end
+
+    local direct = net:FindFirstChild("RE/FavoriteItem")
+    if direct and direct:IsA("RemoteEvent") then
+        return direct
+    end
+
+    for _, descendant in ipairs(net:GetDescendants()) do
+        if descendant:IsA("RemoteEvent") then
+            local lowered = string.lower(descendant.Name)
+            if string.find(lowered, "favor") then
+                return descendant
+            end
+        end
+    end
+
+    return nil
+end
+
 --[[
     FEATURE BLOCK: WindUI Loader
     ------------------------------------------------------------
@@ -838,6 +861,7 @@ Feature.AutoFavourite = {
     mode = "rarity",
     replion = nil,
     itemUtility = nil,
+    favouriteRemote = nil,
 }
 
 local extractMutationNames
@@ -1029,6 +1053,13 @@ function Feature.AutoFavourite:init()
         return false
     end
 
+    if not self.favouriteRemote then
+        self.favouriteRemote = resolveFavouriteRemote()
+        if not self.favouriteRemote then
+            debugOnce("autofav-remote-missing", "Auto Favourite: remote FavoriteItem tidak ditemukan")
+        end
+    end
+
     return true
 end
 
@@ -1176,6 +1207,39 @@ function Feature.AutoFavourite:getBaseData(item)
     return nil
 end
 
+function Feature.AutoFavourite:markFavourite(item)
+    if type(item) ~= "table" then
+        return
+    end
+
+    if item.Favorited then
+        return
+    end
+
+    local uuid = item.UUID or item.Uuid or item.ItemUUID or item.ItemUuid or item.Id
+    if not uuid then
+        debugOnce("autofav-missing-uuid", "Auto Favourite: item tidak punya UUID/Id untuk favorit")
+        return
+    end
+
+    if not self.favouriteRemote then
+        self.favouriteRemote = resolveFavouriteRemote()
+        if not self.favouriteRemote then
+            debugOnce("autofav-remote-missing", "Auto Favourite: remote FavoriteItem tidak ditemukan")
+            return
+        end
+    end
+
+    local remote = self.favouriteRemote
+    local ok, err = pcall(function()
+        remote:FireServer(uuid) -- # NOTE: Sinkronisasi favorit ke server via RemoteEvent FavoriteItem
+    end)
+
+    if not ok then
+        debugOnce("autofav-remote-error", "Auto Favourite: FavoriteItem FireServer gagal", err)
+    end
+end
+
 function Feature.AutoFavourite:shouldFavourite(item, baseData)
     local matchesRarity = false
     local matchesMutation = false
@@ -1225,6 +1289,7 @@ function Feature.AutoFavourite:tick()
         local baseData = self:getBaseData(item)
 
         if not item.Favorited and self:shouldFavourite(item, baseData) then
+            self:markFavourite(item)
             item.Favorited = true
         end
     end
